@@ -207,6 +207,11 @@ def ens_production(dt, u, up, j, jp):
 
     return assemble(1/float(dt)*(inner(Phi, Phi)*dx - inner(Phip, Phip)*dx))
 
+def j_max(j):
+    j_max = Function(Q).interpolate(dot(j, j))
+    j_max_ = j_max.dat.data.max()
+    return j_max_
+
 jp = Function(Q)
 jp.assign(j)
 
@@ -214,7 +219,7 @@ data_filename = "data.csv"
 if mesh.comm.rank == 0:
     with open(data_filename, "w", newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["time", "beta", "ens_product", "ReconRate"])
+        writer.writerow(["time", "beta", "ens_product", "ReconRate", "j_max"])
 
 # reconnection rate
 (u00, B00, p00, r00) = equilibrium_solution()
@@ -254,16 +259,15 @@ while (float(t) < float(T-dt) + 1.0e-10):
     
     beta = compute_beta(dt, z.sub(0), z0.sub(0), j, jp)
     ens_product = ens_production(dt, z.sub(0), z0.sub(0), j, jp)
-    
     ReconRate = (1/float(Rem)) * (j_CG((0, 0)) - j00CG((0, 0)))
+    jmax = j_max(j)
 
-    print(RED % f"blowup beta={beta}, ens_product={ens_product}, ReconRate={ReconRate}")
+    print(RED % f"blowup beta={beta}, ens_product={ens_product}, ReconRate={ReconRate}, jmax={jmax}")
     if mesh.comm.rank == 0:
         with open(data_filename, "a", newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([f"{float(t):.4f}", f"{beta}", f"{ens_product}", f"{ReconRate}"])
+            writer.writerow([f"{float(t):.4f}", f"{beta}", f"{ens_product}", f"{ReconRate}", f"{jmax}"])
     
-
 
     if timestep % 10 ==0:
         pvd.write(u_, B_, p_, r_, j, time = float(t))
