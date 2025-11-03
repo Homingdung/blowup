@@ -174,43 +174,32 @@ j.interpolate(1/Rem * scurl(B_))
 
 pvd.write(u_, B_, p_, r_, j, time = float(t))
 
-def compute_beta(dt, u, up, j, jp):
-    eps = 1e-16
-    j_max = Function(Q).interpolate(dot(j, j))
-    j_max_ = j_max.dat.data.max()
-    jp_max = Function(Q).interpolate(dot(jp, jp))
-    jp_max_ = jp_max.dat.data.max()
-    
-    w_max = Function(Q).interpolate(dot(scurl(u), scurl(u)))
-    w_max_ = w_max.dat.data.max()
-    wp_max = Function(Q).interpolate(dot(scurl(up), scurl(up)))
-    wp_max_ = w_max.dat.data.max()
 
-    beta = j_max_ + w_max_
-    #beta = (np.log(j_inf + w_inf + eps)-np.log(jp_inf + w_inf + eps))/np.log(1/float(dt))
-    return beta
+def norm_inf(u):
+    with u.dat.vec_ro as u_v:
+        u_max = u_v.norm(PETSc.NormType.INFINITY)
+    return u_max
 
-def ens_production(dt, u, up, j, jp):
-    eps = 1e-16
-    j_max = Function(Q).interpolate(dot(j, j))
-    j_max_ = j_max.dat.data.max()
-    jp_max = Function(Q).interpolate(dot(jp, jp))
-    jp_max_ = jp_max.dat.data.max()
-    
-    w_max = Function(Q).interpolate(dot(scurl(u), scurl(u)))
-    w_max_ = w_max.dat.data.max()
-    wp_max = Function(Q).interpolate(dot(scurl(up), scurl(up)))
-    wp_max_ = w_max.dat.data.max()
 
-    Phi = j_max + w_max
-    Phip = jp_max + wp_max
+def ens_max(u, j):
+    w = Function(Q).interpolate(scurl(u))
+    w_max=norm_inf(w)
+    j_max=norm_inf(j)
+    return float(w_max) + float(j_max) 
 
-    return assemble(1/float(dt)*(inner(Phi, Phi)*dx - inner(Phip, Phip)*dx))
+def ens_rate(dt, u, up, j, jp):
+    w = Function(Q).interpolate(scurl(u))
+    wp = Function(Q).interpolate(scurl(up))
+    w_max=norm_inf(w)
+    j_max=norm_inf(jp)
+    wp_max=norm_inf(wp)
+    jp_max=norm_inf(jp)
 
-def j_max(j):
-    j_max = Function(Q).interpolate(dot(j, j))
-    j_max_ = j_max.dat.data.max()
-    return j_max_
+    diff = w_max + j_max - wp_max - jp_max
+
+    return diff/float(dt)
+
+
 
 jp = Function(Q)
 jp.assign(j)
@@ -219,7 +208,7 @@ data_filename = "data.csv"
 if mesh.comm.rank == 0:
     with open(data_filename, "w", newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["time", "beta", "ens_product", "ReconRate", "j_max"])
+        writer.writerow(["time", "ens_rate", "ReconRate", "ens_max"])
 
 # reconnection rate
 (u00, B00, p00, r00) = equilibrium_solution()
@@ -257,16 +246,15 @@ while (float(t) < float(T-dt) + 1.0e-10):
     
     j.interpolate(1/Rem * scurl(z.sub(1)))
     
-    beta = compute_beta(dt, z.sub(0), z0.sub(0), j, jp)
-    ens_product = ens_production(dt, z.sub(0), z0.sub(0), j, jp)
+    ensrate = ens_rate(dt, z.sub(0), z0.sub(0), j, jp)
     ReconRate = (1/float(Rem)) * (j_CG((0, 0)) - j00CG((0, 0)))
-    jmax = j_max(j)
-
-    print(RED % f"blowup beta={beta}, ens_product={ens_product}, ReconRate={ReconRate}, jmax={jmax}")
+    ensmax = ens_max(z.sub(0), j)
+    
+    print(RED % f"ens_rate={ensrate}, ReconRate={ReconRate}, ens_max={ensmax}")
     if mesh.comm.rank == 0:
         with open(data_filename, "a", newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([f"{float(t):.4f}", f"{beta}", f"{ens_product}", f"{ReconRate}", f"{jmax}"])
+            writer.writerow([f"{float(t):.4f}", f"{ensrate}", f"{ReconRate}", f"{ensmax}"])
     
 
     if timestep % 10 ==0:

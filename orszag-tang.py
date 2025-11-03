@@ -2,8 +2,10 @@ from firedrake import *
 from firedrake.petsc import PETSc
 print = PETSc.Sys.Print
 import csv
+import numpy as np
+from mpi4py import MPI
 
-L = 100
+L = 120
 mesh = PeriodicRectangleMesh(L, L, 1, 1, direction="both")
 (x0, y0) = SpatialCoordinate(mesh)
 # mesh.coordinates.dat.data[:, 0] -= L/2
@@ -40,9 +42,11 @@ Rm = Constant(100)
 f = Function(Vg)
 f.interpolate(Constant((0, 0)))
 
-t = 0
+t = Constant(0)
 dt = Constant(1/200)
+T = 1
 
+# initial condition
 u1 = -sin(2*pi * y0)
 u2 = sin(2 * pi * x0)
 u_init = as_vector([u1, u2])
@@ -172,58 +176,38 @@ time_stepper_other = build_solver(F2, z2, bcs2, sp2, options_prefix="dual solver
 def compute_divB(B):
     return norm(div(B), 'L2')
 
-def compute_beta(dt, u, up, j, jp):
-    eps = 1e-16
-    j_max = Function(Vg_).interpolate(dot(j, j))
-    j_max_ = j_max.dat.data.max()
-    jp_max = Function(Vg_).interpolate(dot(jp, jp))
-    jp_max_ = jp_max.dat.data.max()
-    
-    w_max = Function(Vg_).interpolate(dot(scurl(u), scurl(u)))
-    w_max_ = w_max.dat.data.max()
-    wp_max = Function(Vg_).interpolate(dot(scurl(up), scurl(up)))
-    wp_max_ = w_max.dat.data.max()
-
-    beta = j_max_ + w_max_
-    #beta = (np.log(j_inf + w_inf + eps)-np.log(jp_inf + w_inf + eps))/np.log(1/float(dt))
-    return beta
-
-def ens_production(dt, u, up, j, jp):
-    eps = 1e-16
-    j_max = Function(Vg_).interpolate(dot(j, j))
-    j_max_ = j_max.dat.data.max()
-    jp_max = Function(Vg_).interpolate(dot(jp, jp))
-    jp_max_ = jp_max.dat.data.max()
-    
-    w_max = Function(Vg_).interpolate(dot(scurl(u), scurl(u)))
-    w_max_ = w_max.dat.data.max()
-    wp_max = Function(Vg_).interpolate(dot(scurl(up), scurl(up)))
-    wp_max_ = w_max.dat.data.max()
-
-    Phi = j_max + w_max
-    Phip = jp_max + wp_max
-
-    return assemble(1/float(dt)*(inner(Phi, Phi)*dx - inner(Phip, Phip)*dx))
-
-def j_max(j):
-    j_max = Function(Vg_).interpolate(dot(j, j))
-    j_max_ = j_max.dat.data.max()
-    return j_max_
+def norm_inf(u):
+    with u.dat.vec_ro as u_v:
+        u_max = u_v.norm(PETSc.NormType.INFINITY)
+    return u_max
 
 
+def ens_max(w, j):
+    w_max=norm_inf(w)
+    j_max=norm_inf(j)
+    return float(w_max) + float(j_max) 
 
+def ens_rate(dt, w, wp, j, jp):
+    w_max=norm_inf(w)
+    j_max=norm_inf(j)
+    wp_max=norm_inf(wp)
+    jp_max=norm_inf(jp)
+
+    diff = w_max + j_max - wp_max - jp_max
+
+    return diff/float(dt)
 
 # Time stepping
-T = 1
 data_filename = "data.csv"
 if mesh.comm.rank == 0:
     with open(data_filename, "w", newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["time", "beta", "ens_product", "j_max"])
+        writer.writerow(["time", "ens_rate", "ens_max"])
 
-while True:
-    print(f"Solving for t = {float(t):.4f} .. ", flush=True)
-    t += float(dt)
+while (float(t) < float(T-dt) + 1.0e-10):
+    t.assign(t+dt)    
+    if mesh.comm.rank==0:
+        print(f"Solving for t = {float(t):.4f} .. ", flush=True)
 
     # Solve for (u, p)
     time_stepper_u_p.solve()
@@ -237,14 +221,13 @@ while True:
     (u, p) = z1.subfunctions
     (w, j, E, H, B) = z2.subfunctions
     divB = compute_divB(B)
-    beta = compute_beta(dt, z1.sub(0), z1_prev.sub(0), z2.sub(1), z2_prev.sub(1))
-    ens_product = ens_production(dt, z1.sub(0), z1_prev.sub(0), z2.sub(1), z2_prev.sub(1))
-    jmax = j_max(z2.sub(1))
-    print(f"divB: {divB:.8f}, beta={beta}, ens_product={ens_product}, jmax={jmax}")
+    ensrate = ens_rate(dt, z2.sub(0), z2_prev.sub(0), z2.sub(1), z2_prev.sub(1))
+    ensmax = ens_max(z2.sub(0), z2.sub(1))
+    print(f"divB: {divB:.8f}, ens_rate={ensrate}, ensmax={ensmax}")
     if mesh.comm.rank == 0:
         with open(data_filename, "a", newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([f"{float(t):.4f}", f"{beta}", f"{ens_product}", f"{jmax}"])
+            writer.writerow([f"{float(t):.4f}", f"{ensrate}", f"{ensmax}"])
         
 
     #h_c = cross_helicity(u, B)
@@ -252,5 +235,4 @@ while True:
     #print(f"Cross helicity: {h_c:.8f} Magnetic helicity: {h_m: .8f}")
     pvd.write(u, p, w, j, E, H, B, time=float(t))
 
-    if t >= T:
-        break
+  
