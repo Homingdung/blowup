@@ -7,8 +7,9 @@ import csv
 import numpy as np
 from mpi4py import MPI
 
-baseN = 6
+baseN = 8
 mesh = PeriodicUnitCubeMesh(baseN, baseN, baseN)
+mesh.coordinates.dat.data[:] *= 2 * pi
 (x, y, z0) = SpatialCoordinate(mesh)
 # mesh.coordinates.dat.data[:, 0] -= L/2
 # mesh.coordinates.dat.data[:, 1] -= L/2
@@ -45,7 +46,7 @@ f = Function(Vg)
 f.interpolate(Constant((0, 0, 0)))
 
 t = Constant(0)
-dt = Constant(1/200)
+dt = Constant(0.01)
 T = 1
 
 # initial condition Politano-1995
@@ -54,9 +55,9 @@ u2 = 2 * sin(x)
 u3 = 0
 u_init = as_vector([u1, u2, 0])
 
-B1 = 0.8 * (-2) * sin(2*y) + sin(z0)
-B2 = 2 * sin(x) + sin(z0)
-B3 = sin(x) + sin(y)
+B1 = 0.8 * ((-2) * sin(2*y) + sin(z0))
+B2 = 0.8 * (2 * sin(x) + sin(z0))
+B3 = 0.8 * (sin(x) + sin(y))
 B_init = as_vector([B1, B2, B3])
 
 z1.sub(0).interpolate(u_init)
