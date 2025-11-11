@@ -153,28 +153,29 @@ def build_solver(F, u_sol, bcs, solver_parameters, options_prefix=None):
     return solver
 
 
-# def cross_helicity(u, B):
-#     return assemble(inner(u, B)*dx)
-
-
-# def helicity_solver(B):
-#     A = Function(Vc)
-#     v = TestFunction(Vc)
-#     F_curl  = inner(curl(A), curl(v)) * dx - inner(B, curl(v)) * dx
-#     sp = {  
-#            "ksp_type":"gmres",
-#            "pc_type": "ilu",
-#     }
-#     bcs = [DirichletBC(Vc, 0, "on_boundary")]
-#     solver = build_solver(F_curl, A, bcs, solver_parameters = sp, options_prefix="solver_curlcurl")
-#     solver.solve()
-#     return assemble(inner(A, B)*dx)
-
 time_stepper_u_p = build_solver(F1, z1, bcs1, sp1, options_prefix="primal solver")
 time_stepper_other = build_solver(F2, z2, bcs2, sp2, options_prefix="dual solver")
 
 def compute_divB(B):
     return norm(div(B), 'L2')
+
+def helicity_c(u, B):
+     return assemble(inner(u, B)*dx)
+
+def helicity_m(B):
+     A = Function(Vc)
+     v = TestFunction(Vc)
+     F_curl  = inner(curl(A), curl(v)) * dx - inner(B, curl(v)) * dx
+     sp = {  
+            "ksp_type":"gmres",
+            "pc_type": "ilu",
+     }
+     bcs = [DirichletBC(Vc, 0, "on_boundary")]
+     solver = build_solver(F_curl, A, bcs, solver_parameters = sp, options_prefix="solver_curlcurl")
+     solver.solve()
+     return assemble(inner(A, B)*dx)
+
+
 
 def norm_inf(u):
     with u.dat.vec_ro as u_v:
@@ -197,12 +198,13 @@ def ens_rate(dt, w, wp, j, jp):
 
     return diff/float(dt)
 
+
 # Time stepping
 data_filename = "data.csv"
 if mesh.comm.rank == 0:
     with open(data_filename, "w", newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["time", "ens_rate", "ens_max"])
+        writer.writerow(["time", "ens_rate", "ens_max", "helicity_m", "helicity_c"])
 
 while (float(t) < float(T-dt) + 1.0e-10):
     t.assign(t+dt)    
@@ -220,14 +222,17 @@ while (float(t) < float(T-dt) + 1.0e-10):
     # Output
     (u, p) = z1.subfunctions
     (w, j, E, H, B) = z2.subfunctions
-    divB = compute_divB(B)
+    divB = compute_divB(z2.sub(4))
+    helicity_m = helicity_m(z2.sub(4))
+    helicity_c = helicity_c(z1.sub(0), z2.sub(4))
+
     ensrate = ens_rate(dt, z2.sub(0), z2_prev.sub(0), z2.sub(1), z2_prev.sub(1))
     ensmax = ens_max(z2.sub(0), z2.sub(1))
     print(f"divB: {divB:.8f}, ens_rate={ensrate}, ensmax={ensmax}")
     if mesh.comm.rank == 0:
         with open(data_filename, "a", newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([f"{float(t):.4f}", f"{ensrate}", f"{ensmax}"])
+            writer.writerow([f"{float(t):.4f}", f"{ensrate}", f"{ensmax}", f"{helicity_m}", f"{helicity_c}"])
         
 
     #h_c = cross_helicity(u, B)

@@ -7,7 +7,7 @@ import csv
 import numpy as np
 from mpi4py import MPI
 
-baseN = 8
+baseN = 4
 mesh = PeriodicUnitCubeMesh(baseN, baseN, baseN)
 mesh.coordinates.dat.data[:] *= 2 * pi
 (x, y, z0) = SpatialCoordinate(mesh)
@@ -158,6 +158,23 @@ time_stepper_other = build_solver(F2, z2, bcs2, sp2, options_prefix="dual solver
 def compute_divB(B):
     return norm(div(B), 'L2')
 
+def helicity_c(u, B):
+     return assemble(inner(u, B)*dx)
+
+def helicity_m(B):
+     A = Function(Vc)
+     v = TestFunction(Vc)
+     F_curl  = inner(curl(A), curl(v)) * dx - inner(B, curl(v)) * dx
+     sp = {  
+            "ksp_type":"gmres",
+            "pc_type": "ilu",
+     }
+     bcs = [DirichletBC(Vc, 0, "on_boundary")]
+     solver = build_solver(F_curl, A, bcs, solver_parameters = sp, options_prefix="solver_curlcurl")
+     solver.solve()
+     return assemble(inner(A, B)*dx)
+
+
 def norm_inf(u):
     with u.dat.vec_ro as u_v:
         u_max = u_v.norm(PETSc.NormType.INFINITY)
@@ -167,7 +184,7 @@ def norm_inf(u):
 def ens_max(w, j):
     w_max=norm_inf(w)
     j_max=norm_inf(j)
-    return float(w_max) + float(j_max) 
+    return float(w_max), float(j_max), float(w_max) + float(j_max) 
 
 def ens_rate(dt, w, wp, j, jp):
     w_max=norm_inf(w)
@@ -184,7 +201,7 @@ data_filename = "data.csv"
 if mesh.comm.rank == 0:
     with open(data_filename, "w", newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["time", "ens_rate", "ens_max"])
+        writer.writerow(["time", "divB", "ens_total", "w_max", "j_max", "helicity_m", "helicity_c"])
 
 while (float(t) < float(T-dt) + 1.0e-10):
     t.assign(t+dt)    
@@ -202,14 +219,17 @@ while (float(t) < float(T-dt) + 1.0e-10):
     # Output
     (u, p) = z1.subfunctions
     (w, j, E, H, B) = z2.subfunctions
-    divB = compute_divB(B)
+    divB = compute_divB(z2.sub(4))
+    helicity_m_ = helicity_m(z2.sub(4))
+    helicity_c_ = helicity_c(z1.sub(0), z2.sub(4))
+
     ensrate = ens_rate(dt, z2.sub(0), z2_prev.sub(0), z2.sub(1), z2_prev.sub(1))
-    ensmax = ens_max(z2.sub(0), z2.sub(1))
-    print(f"divB: {divB:.8f}, ens_rate={ensrate}, ensmax={ensmax}")
+    w_max, j_max, ens_total = ens_max(z2.sub(0), z2.sub(1))
+    print(f"divB: {divB:.8f}, ens_rate={ensrate}, ensmax={ens_total}")
     if mesh.comm.rank == 0:
         with open(data_filename, "a", newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([f"{float(t):.4f}", f"{ensrate}", f"{ensmax}"])
+            writer.writerow([f"{float(t):.4f}", f"{divB}", f"{ens_total}",f"{w_max}", f"{j_max}", f"{helicity_m_}", f"{helicity_c_}"])
         
 
     #h_c = cross_helicity(u, B)
