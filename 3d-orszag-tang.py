@@ -7,7 +7,7 @@ import csv
 import numpy as np
 from mpi4py import MPI
 
-baseN = 4
+baseN = 8
 mesh = PeriodicUnitCubeMesh(baseN, baseN, baseN)
 mesh.coordinates.dat.data[:] *= 2 * pi
 (x, y, z0) = SpatialCoordinate(mesh)
@@ -47,7 +47,7 @@ f.interpolate(Constant((0, 0, 0)))
 
 t = Constant(0)
 dt = Constant(0.01)
-T = 1
+T = 10
 
 # initial condition Politano-1995
 u1 = -2 * sin(y)
