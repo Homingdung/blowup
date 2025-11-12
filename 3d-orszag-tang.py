@@ -21,21 +21,13 @@ Vg_ = FunctionSpace(mesh, "CG", 1)
 Vd = FunctionSpace(mesh, "RT", 1)
 Vc = FunctionSpace(mesh, "N1curl", 1)
 
-Z1 = MixedFunctionSpace([Vc, Vg_])  # (u, p)
-Z2 = MixedFunctionSpace([Vc, Vc, Vc, Vc, Vd])  # (w, j, E, H, B)
-
-z1 = Function(Z1)  # (u, p)
-z2 = Function(Z2)  # (w, j, E, H, B)
-
-(u, p) = split(z1)
-(w, j, E, H, B) = split(z2)
-(ut, pt) = split(TestFunction(Z1))
-(wt, jt, Et, Ht, Bt) = split(TestFunction(Z2))
-
-z1_prev = Function(Z1)
-z2_prev = Function(Z2)
-(up, pp) = split(z1_prev)
-(wp, jp, Ep, Hp, Bp) = split(z2_prev)
+#u, P, w, j, E, H, B
+Z = MixedFunctionSpace([Vc, Vg_, Vc, Vc, Vc, Vc, Vd])
+z = Function(Z)
+z_prev = Function(Z)
+(u, P, w, j, E, H, B) = split(z)
+(ut, Pt, wt, jt, Et, Ht, Bt) = split(TestFunction(Z))
+(up, Pp, wp, jp, Ep, Hp, Bp) = split(z_prev)
 
 
 c = Constant(1)
@@ -60,49 +52,50 @@ B2 = 0.8 * (2 * sin(x) + sin(z0))
 B3 = 0.8 * (sin(x) + sin(y))
 B_init = as_vector([B1, B2, B3])
 
-z1.sub(0).interpolate(u_init)
-z2.sub(4).interpolate(B_init)  # B component
+z.sub(0).interpolate(u_init)
+z.sub(6).interpolate(B_init)  # B component
 
-z1_prev.assign(z1)
-z2_prev.assign(z2)
+z_prev.assign(z)
 
-
-(u_, p_) = z1.subfunctions
+(u_, P_, w_, j_, E_, H_, B_) = z.subfunctions
 u_.rename("Velocity")
-p_.rename("Pressure")
-(w_, j_, E_, H_, B_) = z2.subfunctions
+P_.rename("TotalPressure")
 B_.rename("MagneticField")
 j_.rename("Current")
 pvd = VTKFile("output/orzag-Tang.pvd")
-pvd.write(z1.sub(0), z1.sub(1), *z2.subfunctions, time=float(t))
+pvd.write(*z.subfunctions, time=float(t))
 
-# Variational forms
-F1 = (
-      inner((u - up) / dt, ut) * dx
-    - inner(cross(u, w), ut) * dx
-    + nu * inner(curl(u), curl(ut)) * dx
-    + inner(grad(p), ut) * dx
-    + c * inner(cross(H, j), ut) * dx
-    + inner(u, grad(pt)) * dx
+u_avg = (u + up)/2
+B_avg = (B + Bp)/2
+
+P_avg = P
+w_avg = w
+j_avg = j
+E_avg = E
+H_avg = H
+
+F = (
+    inner((u - up)/dt, ut) * dx
+    - inner(cross(u_avg, w), ut) * dx
+    + nu * inner(curl(u_avg), curl(ut)) * dx
+    + inner(grad(P_avg), ut) * dx
+    + c * inner(cross(H_avg, j_avg), ut) * dx
+    + inner(u_avg, grad(Pt)) * dx
+    + inner((B - Bp)/dt, Bt) * dx
+    + inner(curl(E_avg), Bt) * dx
+    - eta * inner(j_avg, Et) * dx
+    + inner(E_avg, Et) * dx
+    + inner(cross(u_avg, H_avg), Et) * dx
+    + inner(w_avg, wt) * dx
+    - inner(curl(u_avg), wt) * dx
+    + inner(j_avg, jt) * dx
+    - inner(B_avg, curl(jt)) * dx
+    - inner(B_avg, Ht) * dx
+    + inner(H_avg, Ht) * dx
 )
 
-# F1 generate solution (u, p), in F2 (u, p) serve as known varibles for updating
-F2 = (
-    inner((B - Bp) / dt, Bt) * dx
-    + inner(curl(E), Bt) * dx
-    - eta * inner(j, Et) * dx
-    + inner(E, Et) * dx
-    + inner(cross(H, Et), u) * dx
-    + inner(w, wt) * dx
-    - inner(u, curl(wt)) * dx
-    + inner(j, jt) * dx
-    - inner(B, curl(jt)) * dx
-    - inner(B, Ht) * dx
-    + inner(H, Ht) * dx
-)
 
-# Solvers
-sp1 = {
+lu = {
     "mat_type": "aij",
     "snes_type": "newtonls",
     "snes_monitor": None,
@@ -112,20 +105,8 @@ sp1 = {
     "pc_factor_mat_solver_type": "mumps",
 }
 
-
-sp2 = {
-    "mat_type": "aij",
-    "snes_type": "newtonls",
-    "ksp_monitor":None,
-    "snes_monitor": None,
-    "ksp_type": "preonly",
-    "pc_type": "lu",
-    "pc_factor_mat_solver_type": "mumps",
-}
-
 dirichlet_ids = ("on_boundary",)
-bcs1 = [DirichletBC(Z1.sub(index), 0, subdomain) for index in range(len(Z1)) for subdomain in dirichlet_ids]
-bcs2 = [DirichletBC(Z2.sub(index), 0, subdomain) for index in range(len(Z2)) for subdomain in dirichlet_ids]
+bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)) for subdomain in dirichlet_ids]
 
 
 
@@ -134,26 +115,7 @@ def build_solver(F, u_sol, bcs, solver_parameters, options_prefix=None):
     solver = NonlinearVariationalSolver(problem, solver_parameters=solver_parameters, options_prefix=options_prefix)
     return solver
 
-
-# def cross_helicity(u, B):
-#     return assemble(inner(u, B)*dx)
-
-
-# def helicity_solver(B):
-#     A = Function(Vc)
-#     v = TestFunction(Vc)
-#     F_curl  = inner(curl(A), curl(v)) * dx - inner(B, curl(v)) * dx
-#     sp = {  
-#            "ksp_type":"gmres",
-#            "pc_type": "ilu",
-#     }
-#     bcs = [DirichletBC(Vc, 0, "on_boundary")]
-#     solver = build_solver(F_curl, A, bcs, solver_parameters = sp, options_prefix="solver_curlcurl")
-#     solver.solve()
-#     return assemble(inner(A, B)*dx)
-
-time_stepper_u_p = build_solver(F1, z1, bcs1, sp1, options_prefix="primal solver")
-time_stepper_other = build_solver(F2, z2, bcs2, sp2, options_prefix="dual solver")
+time_stepper = build_solver(F, z, bcs, lu, options_prefix="primal solver")
 
 def compute_divB(B):
     return norm(div(B), 'L2')
@@ -196,11 +158,11 @@ if mesh.comm.rank == 0:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
-divB = compute_divB(z2.sub(4))
-energy = compute_energy(z1.sub(0), z2.sub(4)) # u, B
-helicity_m = compute_helicity_m(z2.sub(4)) # B
-helicity_c = compute_helicity_c(z1.sub(0), z2.sub(4)) # u, B
-w_max, j_max, ens_total = compute_ens(z2.sub(0), z2.sub(1))
+divB = compute_divB(z.sub(6))
+energy = compute_energy(z.sub(0), z.sub(6)) # u, B
+helicity_m = compute_helicity_m(z.sub(6)) # B
+helicity_c = compute_helicity_c(z.sub(0), z.sub(6)) # u, B
+w_max, j_max, ens_total = compute_ens(z.sub(2), z.sub(3)) # w, j
 
 if mesh.comm.rank == 0:
     row = {
@@ -222,23 +184,14 @@ while (float(t) < float(T-dt) + 1.0e-10):
     t.assign(t+dt)    
     if mesh.comm.rank==0:
         print(f"Solving for t = {float(t):.4f} .. ", flush=True)
-
     # Solve for (u, p)
-    time_stepper_u_p.solve()
-    print("Primal solver is done successfully")
-    # Update other variables (w, j, E, H, B)
-    time_stepper_other.solve()
-    print("Dual solver is done successfully")
-    z1_prev.assign(z1)
-    z2_prev.assign(z2)
+    time_stepper.solve()
     # Output
-    (u, p) = z1.subfunctions
-    (w, j, E, H, B) = z2.subfunctions
-    divB = compute_divB(z2.sub(4))
-    energy = compute_energy(z1.sub(0), z2.sub(4)) # u, B
-    helicity_m = compute_helicity_m(z2.sub(4)) # B
-    helicity_c = compute_helicity_c(z1.sub(0), z2.sub(4)) # u, B
-    w_max, j_max, ens_total = compute_ens(z2.sub(0), z2.sub(1))
+    divB = compute_divB(z.sub(6))
+    energy = compute_energy(z.sub(0), z.sub(6)) # u, B
+    helicity_m = compute_helicity_m(z.sub(6)) # B
+    helicity_c = compute_helicity_c(z.sub(0), z.sub(6)) # u, B
+    w_max, j_max, ens_total = compute_ens(z.sub(2), z.sub(3)) # w, j
     print(f"divB: {divB:.8f}, energy={energy}, helicity_m={helicity_m}, helicity_c={helicity_c}, ens_total={ens_total}")
     if mesh.comm.rank == 0:
         row = {
@@ -255,6 +208,6 @@ while (float(t) < float(T-dt) + 1.0e-10):
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writerow(row)
             
-    pvd.write(u, p, w, j, E, H, B, time=float(t))
-
+    pvd.write(*z.subfunctions, time=float(t))
+    z_prev.assign(z)
   
