@@ -8,7 +8,9 @@ import numpy as np
 from mpi4py import MPI
 
 baseN = 100
-mesh = PeriodicUnitSquareMesh(baseN, baseN)
+dp={"partition": True, "overlap_type": (DistributedMeshOverlapType.VERTEX, 1)}
+
+mesh = PeriodicUnitSquareMesh(baseN, baseN, distribution_parameters = dp)
 mesh.coordinates.dat.data[:] *= 2 * pi
 
 (x, y) = SpatialCoordinate(mesh)
@@ -216,8 +218,8 @@ while (float(t) < float(T-dt) + 1.0e-10):
     helicity_m = compute_helicity_m(z.sub(6)) # B
     helicity_c = compute_helicity_c(z.sub(0), z.sub(6)) # u, B
     w_max, j_max, ens_total = compute_ens(z.sub(2), z.sub(3)) # w, j
-    print(f"divB: {divB:.8f}, energy={energy}, helicity_m={helicity_m}, helicity_c={helicity_c}, ens_total={ens_total}")
     if mesh.comm.rank == 0:
+        print(f"divB: {divB:.8f}, energy={energy}, helicity_m={helicity_m}, helicity_c={helicity_c}, ens_total={ens_total}")
         row = {
             "t": float(t),
             "divB": float(divB),
