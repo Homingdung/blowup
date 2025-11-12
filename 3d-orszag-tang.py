@@ -8,7 +8,9 @@ import numpy as np
 from mpi4py import MPI
 
 baseN = 4
-mesh = PeriodicUnitCubeMesh(baseN, baseN, baseN)
+
+dp={"partition": True, "overlap_type": (DistributedMeshOverlapType.VERTEX, 1)}
+mesh = PeriodicUnitCubeMesh(baseN, baseN, baseN, distribution_parameters=dp)
 mesh.coordinates.dat.data[:] *= 2 * pi
 (x, y, z0) = SpatialCoordinate(mesh)
 # mesh.coordinates.dat.data[:, 0] -= L/2
