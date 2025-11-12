@@ -7,7 +7,7 @@ import csv
 import numpy as np
 from mpi4py import MPI
 
-baseN = 100
+baseN = 200
 mesh = PeriodicUnitSquareMesh(baseN, baseN)
 mesh.coordinates.dat.data[:] *= 2 * pi
 
@@ -47,8 +47,8 @@ f = Function(Vg)
 f.interpolate(Constant((0, 0)))
 
 t = Constant(0)
-dt = Constant(1/200)
-T = 1
+dt = Constant(1/100)
+T = 5
 
 # initial condition
 #u1 = -sin(2*pi * y0)
@@ -59,11 +59,14 @@ T = 1
 # Biskamp-Welter-1989
 #phi = cos(x + 1.4) + cos(y + 0.5)
 #psi = cos(2 * x + 2.3) + cos(y + 4.1)
+def v_grad(x):
+    return as_vector([-x.dx(1), x.dx(0)])
+
 phi = cos(x) + cos(y)
 psi = 0.5* cos(2 * x) + cos(y)
 
-u_init = grad(psi)
-B_init = grad(phi)
+u_init = v_grad(psi)
+B_init = v_grad(phi)
  
 z1.sub(0).interpolate(u_init)
 z2.sub(4).interpolate(B_init) 
@@ -104,7 +107,6 @@ def acurl(x):
                      -x[2].dx(0),
                      x[1].dx(0) - x[0].dx(1)
                      ])
-
 # Variational forms
 F1 = (
       inner((u - up) / dt, ut) * dx
@@ -170,39 +172,55 @@ time_stepper_other = build_solver(F2, z2, bcs2, sp2, options_prefix="dual solver
 def compute_divB(B):
     return norm(div(B), 'L2')
 
-def helicity_c(u, B):
+def compute_energy(u, B):
+    return assemble(inner(u, u) * dx + c * inner(B, B) * dx)
+
+def compute_helicity_m(B):
+    return float(0)
+
+def compute_helicity_c(u, B):
      return assemble(inner(u, B)*dx)
-
-
 
 def norm_inf(u):
     with u.dat.vec_ro as u_v:
         u_max = u_v.norm(PETSc.NormType.INFINITY)
     return u_max
 
-
-def ens_max(w, j):
+def compute_ens(w, j):
     w_max=norm_inf(w)
     j_max=norm_inf(j)
     return w_max, j_max, float(w_max) + float(j_max) 
 
-def ens_rate(dt, w, wp, j, jp):
-    w_max=norm_inf(w)
-    j_max=norm_inf(j)
-    wp_max=norm_inf(wp)
-    jp_max=norm_inf(jp)
-
-    diff = w_max + j_max - wp_max - jp_max
-
-    return diff/float(dt)
-
 
 # Time stepping
 data_filename = "data.csv"
+fieldnames = ["t", "divB", "energy", "helicity_m", "helicity_c", "ens_total", "w_max", "j_max"]
 if mesh.comm.rank == 0:
     with open(data_filename, "w", newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(["time", "divB", "ens_total", "w_max", "j_max", "helicity_m", "helicity_c"])
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+divB = compute_divB(z2.sub(4))
+energy = compute_energy(z1.sub(0), z2.sub(4)) # u, B
+helicity_m = compute_helicity_m(z2.sub(4)) # B
+helicity_c = compute_helicity_c(z1.sub(0), z2.sub(4)) # u, B
+w_max, j_max, ens_total = compute_ens(z2.sub(0), z2.sub(1))
+
+if mesh.comm.rank == 0:
+    row = {
+        "t": float(t),
+        "divB": float(divB),
+        "energy": float(energy),
+        "helicity_c": float(helicity_c),
+        "helicity_m": float(helicity_m),
+        "ens_total": float(ens_total),
+        "w_max": float(w_max),
+        "j_max": float(j_max),
+    }
+    with open(data_filename, "a", newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writerow(row)
+
 
 while (float(t) < float(T-dt) + 1.0e-10):
     t.assign(t+dt)    
@@ -221,17 +239,26 @@ while (float(t) < float(T-dt) + 1.0e-10):
     (u, p) = z1.subfunctions
     (w, j, E, H, B) = z2.subfunctions
     divB = compute_divB(z2.sub(4))
-    helicity_m_ = float(0)
-    helicity_c_ = helicity_c(z1.sub(0), z2.sub(4))
-
-    ensrate = ens_rate(dt, z2.sub(0), z2_prev.sub(0), z2.sub(1), z2_prev.sub(1))
-    w_max, j_max, ens_total = ens_max(z2.sub(0), z2.sub(1))
-    print(f"divB: {divB:.8f}, ens_rate={ensrate}, ensmax={ens_total}")
+    energy = compute_energy(z1.sub(0), z2.sub(4)) # u, B
+    helicity_m = compute_helicity_m(z2.sub(4)) # B
+    helicity_c = compute_helicity_c(z1.sub(0), z2.sub(4)) # u, B
+    w_max, j_max, ens_total = compute_ens(z2.sub(0), z2.sub(1))
+    print(f"divB: {divB:.8f}, energy={energy}, helicity_m={helicity_m}, helicity_c={helicity_c}, ens_total={ens_total}")
     if mesh.comm.rank == 0:
+        row = {
+            "t": float(t),
+            "divB": float(divB),
+            "energy": float(energy),
+            "helicity_c": float(helicity_c),
+            "helicity_m": float(helicity_m),
+            "ens_total": float(ens_total),
+            "w_max": float(w_max),
+            "j_max": float(j_max),
+        }
         with open(data_filename, "a", newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([f"{float(t):.4f}", f"{divB}", f"{ens_total}",f"{w_max}", f"{j_max}", f"{helicity_m_}", f"{helicity_c_}"])
-        
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writerow(row)
+            
     pvd.write(u, p, w, j, E, H, B, time=float(t))
 
   
