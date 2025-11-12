@@ -231,10 +231,6 @@ while (float(t) < float(T-dt) + 1.0e-10):
             writer = csv.writer(f)
             writer.writerow([f"{float(t):.4f}", f"{divB}", f"{ens_total}",f"{w_max}", f"{j_max}", f"{helicity_m_}", f"{helicity_c_}"])
         
-
-    #h_c = cross_helicity(u, B)
-    #h_m = helicity_solver(B)
-    #print(f"Cross helicity: {h_c:.8f} Magnetic helicity: {h_m: .8f}")
     pvd.write(u, p, w, j, E, H, B, time=float(t))
 
   

@@ -1,3 +1,5 @@
+# 2d orsag-tang
+
 from firedrake import *
 from firedrake.petsc import PETSc
 print = PETSc.Sys.Print
@@ -5,9 +7,11 @@ import csv
 import numpy as np
 from mpi4py import MPI
 
-L = 120
-mesh = PeriodicRectangleMesh(L, L, 1, 1, direction="both")
-(x0, y0) = SpatialCoordinate(mesh)
+baseN = 100
+mesh = PeriodicUnitSquareMesh(baseN, baseN)
+mesh.coordinates.dat.data[:] *= 2 * pi
+
+(x, y) = SpatialCoordinate(mesh)
 # mesh.coordinates.dat.data[:, 0] -= L/2
 # mesh.coordinates.dat.data[:, 1] -= L/2
 # mesh.coordinates.dat.data[:, 2] -= L/2
@@ -36,8 +40,8 @@ z2_prev = Function(Z2)
 
 
 c = Constant(1)
-Re = Constant(100)
-Rm = Constant(100)
+nu = Constant(0)
+eta = Constant(0)
 
 f = Function(Vg)
 f.interpolate(Constant((0, 0)))
@@ -47,15 +51,22 @@ dt = Constant(1/200)
 T = 1
 
 # initial condition
-u1 = -sin(2*pi * y0)
-u2 = sin(2 * pi * x0)
-u_init = as_vector([u1, u2])
-B1 = -sin(2 * pi *y0) 
-B2 = sin(4 * pi * x0)
-B_init = as_vector([B1, B2])
+#u1 = -sin(2*pi * y0)
+#u2 = sin(2 * pi * x0)
+#B1 = -sin(2 * pi *y0) 
+#B2 = sin(4 * pi * x0)
+
+# Biskamp-Welter-1989
+#phi = cos(x + 1.4) + cos(y + 0.5)
+#psi = cos(2 * x + 2.3) + cos(y + 4.1)
+phi = cos(x) + cos(y)
+psi = 0.5* cos(2 * x) + cos(y)
+
+u_init = grad(psi)
+B_init = grad(phi)
  
 z1.sub(0).interpolate(u_init)
-z2.sub(4).interpolate(B_init)  # B component
+z2.sub(4).interpolate(B_init) 
 
 z1_prev.assign(z1)
 z2_prev.assign(z2)
@@ -98,7 +109,7 @@ def acurl(x):
 F1 = (
       inner((u - up) / dt, ut) * dx
     - inner(vcross(u, w), ut) * dx
-    + 1 / Re * inner(curl(u), curl(ut)) * dx
+    + nu * inner(curl(u), curl(ut)) * dx
     + inner(grad(p), ut) * dx
     + c * inner(vcross(H, j), ut) * dx
     + inner(u, grad(pt)) * dx
@@ -108,7 +119,7 @@ F1 = (
 F2 = (
     inner((B - Bp) / dt, Bt) * dx
     + inner(vcurl(E), Bt) * dx
-    - 1 / Rm * inner(j, Et) * dx
+    - eta * inner(j, Et) * dx
     + inner(E, Et) * dx
     + inner(vcross(H, Et), u) * dx
     + inner(w, wt) * dx
@@ -162,19 +173,6 @@ def compute_divB(B):
 def helicity_c(u, B):
      return assemble(inner(u, B)*dx)
 
-def helicity_m(B):
-     A = Function(Vc)
-     v = TestFunction(Vc)
-     F_curl  = inner(curl(A), curl(v)) * dx - inner(B, curl(v)) * dx
-     sp = {  
-            "ksp_type":"gmres",
-            "pc_type": "ilu",
-     }
-     bcs = [DirichletBC(Vc, 0, "on_boundary")]
-     solver = build_solver(F_curl, A, bcs, solver_parameters = sp, options_prefix="solver_curlcurl")
-     solver.solve()
-     return assemble(inner(A, B)*dx)
-
 
 
 def norm_inf(u):
@@ -186,7 +184,7 @@ def norm_inf(u):
 def ens_max(w, j):
     w_max=norm_inf(w)
     j_max=norm_inf(j)
-    return float(w_max) + float(j_max) 
+    return w_max, j_max, float(w_max) + float(j_max) 
 
 def ens_rate(dt, w, wp, j, jp):
     w_max=norm_inf(w)
@@ -204,7 +202,7 @@ data_filename = "data.csv"
 if mesh.comm.rank == 0:
     with open(data_filename, "w", newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["time", "ens_rate", "ens_max", "helicity_m", "helicity_c"])
+        writer.writerow(["time", "divB", "ens_total", "w_max", "j_max", "helicity_m", "helicity_c"])
 
 while (float(t) < float(T-dt) + 1.0e-10):
     t.assign(t+dt)    
@@ -223,21 +221,17 @@ while (float(t) < float(T-dt) + 1.0e-10):
     (u, p) = z1.subfunctions
     (w, j, E, H, B) = z2.subfunctions
     divB = compute_divB(z2.sub(4))
-    helicity_m = helicity_m(z2.sub(4))
-    helicity_c = helicity_c(z1.sub(0), z2.sub(4))
+    helicity_m_ = float(0)
+    helicity_c_ = helicity_c(z1.sub(0), z2.sub(4))
 
     ensrate = ens_rate(dt, z2.sub(0), z2_prev.sub(0), z2.sub(1), z2_prev.sub(1))
-    ensmax = ens_max(z2.sub(0), z2.sub(1))
-    print(f"divB: {divB:.8f}, ens_rate={ensrate}, ensmax={ensmax}")
+    w_max, j_max, ens_total = ens_max(z2.sub(0), z2.sub(1))
+    print(f"divB: {divB:.8f}, ens_rate={ensrate}, ensmax={ens_total}")
     if mesh.comm.rank == 0:
         with open(data_filename, "a", newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([f"{float(t):.4f}", f"{ensrate}", f"{ensmax}", f"{helicity_m}", f"{helicity_c}"])
+            writer.writerow([f"{float(t):.4f}", f"{divB}", f"{ens_total}",f"{w_max}", f"{j_max}", f"{helicity_m_}", f"{helicity_c_}"])
         
-
-    #h_c = cross_helicity(u, B)
-    #h_m = helicity_solver(B)
-    #print(f"Cross helicity: {h_c:.8f} Magnetic helicity: {h_m: .8f}")
     pvd.write(u, p, w, j, E, H, B, time=float(t))
 
   
