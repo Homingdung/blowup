@@ -7,7 +7,7 @@ import csv
 import numpy as np
 from mpi4py import MPI
 
-baseN = 4
+baseN = 10
 
 dp={"partition": True, "overlap_type": (DistributedMeshOverlapType.VERTEX, 1)}
 mesh = PeriodicUnitCubeMesh(baseN, baseN, baseN, distribution_parameters=dp)
@@ -41,7 +41,7 @@ f.interpolate(Constant((0, 0, 0)))
 
 t = Constant(0)
 dt = Constant(0.01)
-T = 10
+T = 0.6
 
 # initial condition Politano-1995
 u1 = -2 * sin(y)

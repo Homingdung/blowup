@@ -1,11 +1,35 @@
 # 2d orsag-tang
-
+# no structure preserving scheme
+# BE scheme
 from firedrake import *
 from firedrake.petsc import PETSc
 print = PETSc.Sys.Print
 import csv
 import numpy as np
 from mpi4py import MPI
+# Define two-dimensional versions of cross and curl operators
+def scross(x, y):
+    return x[0]*y[1] - x[1]*y[0]
+
+
+def vcross(x, y):
+    return as_vector([x[1]*y, -x[0]*y])
+
+
+def scurl(x):
+    return x[1].dx(0) - x[0].dx(1)
+
+
+def vcurl(x):
+    return as_vector([x.dx(1), -x.dx(0)])
+
+
+def acurl(x):
+    return as_vector([
+                     x[2].dx(1),
+                     -x[2].dx(0),
+                     x[1].dx(0) - x[0].dx(1)
+                     ])
 
 baseN = 100
 dp={"partition": True, "overlap_type": (DistributedMeshOverlapType.VERTEX, 1)}
@@ -18,19 +42,20 @@ mesh.coordinates.dat.data[:] *= 2 * pi
 # mesh.coordinates.dat.data[:, 1] -= L/2
 # mesh.coordinates.dat.data[:, 2] -= L/2
 
-Vg = VectorFunctionSpace(mesh, "CG", 1)
+Vg = VectorFunctionSpace(mesh, "CG", 2)
 Vn = FunctionSpace(mesh, "DG", 0)
 Vg_ = FunctionSpace(mesh, "CG", 1)
 Vd = FunctionSpace(mesh, "RT", 1)
 Vc = FunctionSpace(mesh, "N1curl", 1)
 
-#u, P, w, j, E, H, B
-Z = MixedFunctionSpace([Vc, Vg_, Vg_, Vg_, Vg_, Vc, Vd])
+#u, p, B, E
+Z = MixedFunctionSpace([Vg, Vn, Vd, Vg_])
 z = Function(Z)
+(u, p, B, E) = split(z)
+(ut, pt, Bt, Et) = split(TestFunction(Z))
+
 z_prev = Function(Z)
-(u, P, w, j, E, H, B) = split(z)
-(ut, Pt, wt, jt, Et, Ht, Bt) = split(TestFunction(Z))
-(up, Pp, wp, jp, Ep, Hp, Bp) = split(z_prev)
+(up, pp, Bp, Ep) = split(z_prev)
 
 
 c = Constant(1)
@@ -64,71 +89,45 @@ u_init = v_grad(psi)
 B_init = v_grad(phi)
  
 z.sub(0).interpolate(u_init)
-z.sub(6).interpolate(B_init) 
-
+z.sub(2).interpolate(B_init) 
 z_prev.assign(z)
 
-
-(u_, P_, w_, j_, E_, H_, B_) = z.subfunctions
+(u_, p_, B_, E_) = z.subfunctions
 u_.rename("Velocity")
-P_.rename("TotalPressure")
+p_.rename("Pressure")
 B_.rename("MagneticField")
-j_.rename("Current")
+E_.rename("ElectricField")
+
 pvd = VTKFile("output/orzag-Tang.pvd")
 pvd.write(*z.subfunctions, time=float(t))
 
-# Define two-dimensional versions of cross and curl operators
-def scross(x, y):
-    return x[0]*y[1] - x[1]*y[0]
 
 
-def vcross(x, y):
-    return as_vector([x[1]*y, -x[0]*y])
-
-
-def scurl(x):
-    return x[1].dx(0) - x[0].dx(1)
-
-
-def vcurl(x):
-    return as_vector([x.dx(1), -x.dx(0)])
-
-
-def acurl(x):
-    return as_vector([
-                     x[2].dx(1),
-                     -x[2].dx(0),
-                     x[1].dx(0) - x[0].dx(1)
-                     ])
-u_avg = (u + up)/2
-B_avg = (B + Bp)/2
-
-P_avg = P
-w_avg = w
-j_avg = j
-E_avg = E
-H_avg = H
-
+# write out the linear form
 F = (
-    inner((u - up)/dt, ut) * dx
-    - inner(vcross(u_avg, w), ut) * dx
-    + nu * inner(curl(u_avg), curl(ut)) * dx
-    + inner(grad(P_avg), ut) * dx
-    + c * inner(vcross(H_avg, j_avg), ut) * dx
-    + inner(u_avg, grad(Pt)) * dx
-    + inner((B - Bp)/dt, Bt) * dx
-    + inner(curl(E_avg), Bt) * dx
-    - eta * inner(j_avg, Et) * dx
-    + inner(E_avg, Et) * dx
-    + inner(scross(u_avg, H_avg), Et) * dx
-    + inner(w_avg, wt) * dx
-    - inner(scurl(u_avg), wt) * dx
-    + inner(j_avg, jt) * dx
-    - inner(B_avg, vcurl(jt)) * dx
-    - inner(B_avg, Ht) * dx
-    + inner(H_avg, Ht) * dx
-)
-
+    # equation for u
+    + inner((u-up)/dt, ut) * dx
+    + nu * inner(grad(u), grad(ut)) * dx
+    + 1/dt * inner(div(u), div(ut)) * dx
+    + inner(dot(grad(up), up), ut) * dx
+    - inner(p, div(ut)) * dx
+    + c * inner(vcross(Bp, E), ut) * dx
+    + c * inner(scross(u, Bp), scross(ut, Bp)) * dx #nonlinear term
+    #- inner(f,  ut) * dx
+    
+    #equation for p, the sign does matter!!!
+    - inner(div(u), pt) * dx
+    
+    # equation for B
+    + inner((B-Bp)/dt, Bt) * dx
+    + inner(vcurl(E), Bt) * dx 
+    
+    # equation for E
+    + inner(E, Et) * dx
+    + inner(scross(u, Bp), Et) * dx # nonlinear term
+    - eta * inner(B, vcurl(Et)) * dx
+    )
+    
 
 lu = {
     "mat_type": "aij",
@@ -140,9 +139,6 @@ lu = {
     "pc_factor_mat_solver_type": "mumps",
 }
 
-dirichlet_ids = ("on_boundary",)
-bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)) for subdomain in dirichlet_ids]
-
 
 
 def build_solver(F, u_sol, bcs, solver_parameters, options_prefix=None):
@@ -150,7 +146,7 @@ def build_solver(F, u_sol, bcs, solver_parameters, options_prefix=None):
     solver = NonlinearVariationalSolver(problem, solver_parameters=solver_parameters, options_prefix=options_prefix)
     return solver
 
-
+bcs = None
 time_stepper = build_solver(F, z, bcs, lu, options_prefix="primal solver")
 
 def compute_divB(B):
@@ -184,11 +180,18 @@ if mesh.comm.rank == 0:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
-divB = compute_divB(z.sub(6))
-energy = compute_energy(z.sub(0), z.sub(6)) # u, B
-helicity_m = compute_helicity_m(z.sub(6)) # B
-helicity_c = compute_helicity_c(z.sub(0), z.sub(6)) # u, B
-w_max, j_max, ens_total = compute_ens(z.sub(2), z.sub(3)) # w, j
+j = Function(Vg_,name="Current")
+w = Function(Vg_, name="Vorticity")
+j.interpolate(scurl(z.sub(2)))
+w.interpolate(scurl(z.sub(0)))
+pvd1 = VTKFile("output/current.pvd")
+pvd1.write(w, j, time=float(t))
+
+divB = compute_divB(z.sub(2))
+energy = compute_energy(z.sub(0), z.sub(2)) # u, B
+helicity_m = compute_helicity_m(z.sub(2)) # B
+helicity_c = compute_helicity_c(z.sub(0), z.sub(2)) # u, B
+w_max, j_max, ens_total = compute_ens(w, j) # w, j
 
 if mesh.comm.rank == 0:
     row = {
@@ -213,11 +216,14 @@ while (float(t) < float(T-dt) + 1.0e-10):
     # Solve for (u, p)
     time_stepper.solve()
     # Output
-    divB = compute_divB(z.sub(6))
-    energy = compute_energy(z.sub(0), z.sub(6)) # u, B
-    helicity_m = compute_helicity_m(z.sub(6)) # B
-    helicity_c = compute_helicity_c(z.sub(0), z.sub(6)) # u, B
-    w_max, j_max, ens_total = compute_ens(z.sub(2), z.sub(3)) # w, j
+    j.interpolate(scurl(z.sub(2)))
+    w.interpolate(scurl(z.sub(0)))
+    divB = compute_divB(z.sub(2))
+    energy = compute_energy(z.sub(0), z.sub(2)) # u, B
+    helicity_m = compute_helicity_m(z.sub(2)) # B
+    helicity_c = compute_helicity_c(z.sub(0), z.sub(2)) # u, B
+    w_max, j_max, ens_total = compute_ens(w, j) # w, j
+
     if mesh.comm.rank == 0:
         print(f"divB: {divB:.8f}, energy={energy}, helicity_m={helicity_m}, helicity_c={helicity_c}, ens_total={ens_total}")
         row = {
@@ -235,5 +241,6 @@ while (float(t) < float(T-dt) + 1.0e-10):
             writer.writerow(row)
             
     pvd.write(*z.subfunctions, time=float(t))
+    pvd1.write(w, j, time=float(t))
     z_prev.assign(z)
   

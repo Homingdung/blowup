@@ -6,7 +6,7 @@ df = pd.read_csv("data.csv")
 
 plt.plot(df["t"], df["energy"], label="energy")
 #plt.plot(df["t"], df["helicity_m"], label="magneticHelicity")
-plt.plot(df["t"], df["helicity_c"], label="crossHelicity")
+#plt.plot(df["t"], df["helicity_c"], label="crossHelicity")
 
 plt.xlabel("Time")
 plt.ylabel("Value")
