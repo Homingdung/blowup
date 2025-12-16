@@ -6,9 +6,10 @@ print = PETSc.Sys.Print
 import csv
 import numpy as np
 from mpi4py import MPI
-
-baseN = 100
-dp={"partition": True, "overlap_type": (DistributedMeshOverlapType.VERTEX, 1)}
+import os
+baseN = 200
+dp={}
+# dp={"partition": True, "overlap_type": (DistributedMeshOverlapType.VERTEX, 1)}
 
 mesh = PeriodicUnitSquareMesh(baseN, baseN, distribution_parameters = dp)
 mesh.coordinates.dat.data[:] *= 2 * pi
@@ -67,7 +68,65 @@ z.sub(0).interpolate(u_init)
 z.sub(6).interpolate(B_init) 
 
 z_prev.assign(z)
+def spectrum(u, B):
+    N = baseN
+    x = np.linspace(0, 2*np.pi, N, endpoint = False)
+    y = np.linspace(0, 2*np.pi, N, endpoint = False)
+    X, Y = np.meshgrid(x, y, indexing="ij")
 
+# uniform mesh for evaluation
+    u_vals = np.zeros((N, N, 2))
+    B_vals = np.zeros((N, N, 2))
+
+    for i in range(N):
+        for j in range(N):
+            u_vals[i, j, :] = u.at([x[i], y[j]])
+            B_vals[i, j, :] = B.at([x[i], y[j]])
+
+    uhat_x = np.fft.fftn(u_vals[:, :, 0])
+    uhat_y = np.fft.fftn(u_vals[:, :, 1])
+
+    Bhat_x = np.fft.fftn(B_vals[:, :, 0])
+    Bhat_y = np.fft.fftn(B_vals[:, :, 1])
+
+
+    kx = np.fft.fftfreq(N, d=2*np.pi/N) * 2*np.pi
+    ky = np.fft.fftfreq(N, d=2*np.pi/N) * 2*np.pi
+    KX, KY = np.meshgrid(kx, ky, indexing="ij")
+    K = np.sqrt(KX**2 + KY**2)
+
+
+    E_u_k = 0.5 * (np.abs(uhat_x)**2 + np.abs(uhat_y)**2)
+    E_B_k = 0.5 * (np.abs(Bhat_x)**2 + np.abs(Bhat_y)**2)
+
+
+    kmax = int(np.max(K))
+    E_u = np.zeros(kmax)
+    E_B = np.zeros(kmax)
+
+    for k in range(kmax):
+        mask = (K >= k) & (K < k+1)
+        E_u[k] = np.sum(E_u_k[mask])
+        E_B[k] = np.sum(E_B_k[mask])
+
+    import matplotlib.pyplot as plt
+
+    k = np.arange(1, len(E_u))
+
+    plt.figure()
+    plt.loglog(k, E_u[1:], 'o-', label='Kinetic')
+    plt.loglog(k, E_B[1:], 's-', label='Magnetic')
+
+    # 参考 k^{-5/3}
+    plt.loglog(k, 1e-2 * k**(-5/3), '--', label=r'$k^{-5/3}$')
+
+    plt.xlabel(r'$k$')
+    plt.ylabel(r'$E(k)$')
+    plt.legend()
+    plt.grid(True, which="both")
+    plt.tight_layout()
+    plt.savefig("spectrum.png", dpi=300)
+    plt.close()  
 
 (u_, P_, w_, j_, E_, H_, B_) = z.subfunctions
 u_.rename("Velocity")
@@ -75,6 +134,8 @@ P_.rename("TotalPressure")
 B_.rename("MagneticField")
 j_.rename("Current")
 pvd = VTKFile("output/orzag-Tang.pvd")
+if mesh.comm.rank == 0:
+    os.makedirs('output', exist_ok=True)
 pvd.write(*z.subfunctions, time=float(t))
 
 # Define two-dimensional versions of cross and curl operators
@@ -205,7 +266,7 @@ if mesh.comm.rank == 0:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writerow(row)
 
-
+timestep = 0
 while (float(t) < float(T-dt) + 1.0e-10):
     t.assign(t+dt)    
     if mesh.comm.rank==0:
@@ -233,7 +294,8 @@ while (float(t) < float(T-dt) + 1.0e-10):
         with open(data_filename, "a", newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writerow(row)
-            
+    if timestep == 20:
+        spectrum(z.sub(0), z.sub(6))
     pvd.write(*z.subfunctions, time=float(t))
     z_prev.assign(z)
-  
+    timestep += 1
