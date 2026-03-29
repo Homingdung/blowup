@@ -7,7 +7,7 @@ import csv
 import numpy as np
 from mpi4py import MPI
 
-baseN = 10
+baseN = 8
 
 dp={"partition": True, "overlap_type": (DistributedMeshOverlapType.VERTEX, 1)}
 mesh = PeriodicUnitCubeMesh(baseN, baseN, baseN, distribution_parameters=dp)
@@ -33,15 +33,15 @@ z_prev = Function(Z)
 
 
 c = Constant(1)
-nu = Constant(0)
-eta = Constant(0)
+nu = Constant(1e-3)
+eta = Constant(1e-3)
 
 f = Function(Vg)
 f.interpolate(Constant((0, 0, 0)))
 
 t = Constant(0)
-dt = Constant(0.01)
-T = 0.6
+dt = Constant(0.05)
+T = 10.0
 
 # initial condition Politano-1995
 u1 = -2 * sin(y)
@@ -153,7 +153,7 @@ def compute_ens(w, j):
 
 
 # Time stepping
-data_filename = "data.csv"
+data_filename = "output/data.csv"
 fieldnames = ["t", "divB", "energy", "helicity_m", "helicity_c", "ens_total", "w_max", "j_max"]
 if mesh.comm.rank == 0:
     with open(data_filename, "w", newline='') as f:

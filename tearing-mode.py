@@ -9,7 +9,9 @@ import numpy as np
 from mpi4py import MPI
 import os
 baseN = 100
-mesh = PeriodicRectangleMesh(baseN, baseN, 3, 1, direction="x")
+Lx = 3
+Ly = 1
+mesh = PeriodicRectangleMesh(baseN, baseN, Lx, Ly, direction="x")
 (x, y) = SpatialCoordinate(mesh)
 # mesh.coordinates.dat.data[:, 0] -= L/2
 # mesh.coordinates.dat.data[:, 1] -= L/2
@@ -30,15 +32,15 @@ z_prev = Function(Z)
 (up, Pp, wp, jp, Ep, Hp, Bp) = split(z_prev)
 
 
-c = Constant(1)
-nu = Constant(1e-3)
-eta = Constant(1e-3)
+c = Constant(10)
+nu = Constant(1e-4)
+eta = Constant(1e-4)
 
 f = Function(Vg)
 f.interpolate(Constant((0, 0)))
 
 t = Constant(0)
-dt = Constant(1/10)
+dt = Constant(0.01)
 T = 10.0
 
 # initial condition
@@ -50,24 +52,25 @@ T = 10.0
 def v_grad(x):
     return as_vector([-x.dx(1), x.dx(0)])
 
-lmbda = 5
+lmbda = 10
 phi = 1/lmbda * ln(cosh(lmbda * (y - 0.5)))
 m = 1
-Lx = 3
 kx = 2*pi*m/Lx
 eps = 5e-2
-del_phi = eps * cos(kx * x) * (1.0 / cosh(lmbda*(y-0.5))**2)
+#del_psi = eps * cos(kx * x) * (1.0 / cosh(lmbda*(y-0.5))**2)
+del_psi = eps * sin(pi* y) * cos(2*pi/3 * x)
 
 u_init = as_vector([0, 0])
-B_init = v_grad(phi + del_phi)
+B_init = v_grad(phi + del_psi)
  
 z.sub(0).interpolate(u_init)
 z.sub(6).interpolate(B_init) 
 z_prev.assign(z)
+
 def spectrum(u, B):
     N = baseN
-    x = np.linspace(0, 2*np.pi, N, endpoint = False)
-    y = np.linspace(0, 2*np.pi, N, endpoint = False)
+    x = np.linspace(0, Lx, N, endpoint = False)
+    y = np.linspace(0, Ly, N, endpoint = False)
     X, Y = np.meshgrid(x, y, indexing="ij")
 
 # uniform mesh for evaluation
@@ -131,8 +134,6 @@ w_.rename("Vorticity")
 B_.rename("MagneticField")
 j_.rename("Current")
 pvd = VTKFile("output/tearing-mode.pvd")
-if mesh.comm.rank == 0:
-    os.makedirs('output', exist_ok=True)
 pvd.write(*z.subfunctions, time=float(t))
 
 # Define two-dimensional versions of cross and curl operators
@@ -236,7 +237,7 @@ def compute_ens(w, j):
 
 
 # Time stepping
-data_filename = "data.csv"
+data_filename = "output/data.csv"
 fieldnames = ["t", "divB", "energy", "helicity_m", "helicity_c", "ens_total", "w_max", "j_max"]
 if mesh.comm.rank == 0:
     with open(data_filename, "w", newline='') as f:
@@ -277,6 +278,7 @@ while (float(t) < float(T-dt) + 1.0e-10):
     helicity_m = compute_helicity_m(z.sub(6)) # B
     helicity_c = compute_helicity_c(z.sub(0), z.sub(6)) # u, B
     w_max, j_max, ens_total = compute_ens(z.sub(2), z.sub(3)) # w, j
+    dofs = Z.dim()
     if mesh.comm.rank == 0:
         print(f"divB: {divB:.8f}, energy={energy}, helicity_m={helicity_m}, helicity_c={helicity_c}, ens_total={ens_total}")
         row = {
@@ -292,7 +294,8 @@ while (float(t) < float(T-dt) + 1.0e-10):
         with open(data_filename, "a", newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writerow(row)
-#if timestep == 20:
+        print(f"dof={dofs}")
+    #if timestep == 10:
         #spectrum(z.sub(0), z.sub(6))
     pvd.write(*z.subfunctions, time=float(t))
     z_prev.assign(z)

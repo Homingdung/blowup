@@ -1,4 +1,4 @@
-# KH stability
+# double shear layer
 from firedrake import *
 from firedrake.petsc import PETSc
 print = PETSc.Sys.Print
@@ -9,6 +9,7 @@ from irksome import GaussLegendre, Dt, MeshConstant, TimeStepper
 import os
 from mpi4py import MPI
 
+baseN = 32
 stage = 2
 butcher_tableau=GaussLegendre(stage)
 
@@ -16,7 +17,7 @@ dp={"partition": True, "overlap_type": (DistributedMeshOverlapType.VERTEX, 1)}
 baseN = 32
 nref = 1
 
-base = PeriodicUnitSquareMesh(baseN, baseN, direction="x", distribution_parameters = dp)
+base = PeriodicUnitSquareMesh(baseN, baseN, distribution_parameters = dp)
 mh = MeshHierarchy(base, nref, distribution_parameters = dp)
 mesh = mh[-1]
 
@@ -53,19 +54,21 @@ def v_grad(x):
 
 # initial conditions
 rho = Constant(30.0)    
-delta0 = 1/28
+delta = Constant(0.05) 
 
-u_0 = as_vector([tanh((2 * y-1)/delta0), 0])
-psi = 0.001 * exp(-(y-0.5)**2/delta0**2) * (cos(8*pi*x) + cos(20*pi*x))
-u_per = v_grad(psi)
-u_init = u_0 + u_per
+u1_expr = conditional(y <= 0.5,
+                      tanh(rho * (y - 0.25)),
+                      tanh(rho * (0.75 - y)))
+
+u2_expr = delta * sin(2 * pi * x)
+u_init = as_vector([u1_expr, u2_expr])
 
 epsilon = Constant(0.07957747154595)
 Bx = tanh(y/epsilon)
-B_init = as_vector([Bx, 0])
+B_init = as_vector([0, 1])
  
 z.sub(0).interpolate(u_init)
-z.sub(6).interpolate(B_init) 
+#z.sub(6).interpolate(B_init) 
 
 (u_, P_, w_, j_, E_, H_, B_) = z.subfunctions
 u_.rename("Velocity")

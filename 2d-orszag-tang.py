@@ -7,11 +7,9 @@ import csv
 import numpy as np
 from mpi4py import MPI
 import os
-baseN = 200
-dp={}
-# dp={"partition": True, "overlap_type": (DistributedMeshOverlapType.VERTEX, 1)}
+baseN = 64
 
-mesh = PeriodicUnitSquareMesh(baseN, baseN, distribution_parameters = dp)
+mesh = PeriodicUnitSquareMesh(baseN, baseN)
 mesh.coordinates.dat.data[:] *= 2 * pi
 
 (x, y) = SpatialCoordinate(mesh)
@@ -35,15 +33,15 @@ z_prev = Function(Z)
 
 
 c = Constant(1)
-nu = Constant(1e-5)
-eta = Constant(1e-5)
+nu = Constant(1e-3)
+eta = Constant(1e-3)
 
 f = Function(Vg)
 f.interpolate(Constant((0, 0)))
 
 t = Constant(0)
-dt = Constant(1/50)
-T = 5.0
+dt = Constant(0.1)
+T = 10.0
 
 # initial condition
 #u1 = -sin(2*pi * y0)
@@ -114,8 +112,8 @@ def spectrum(u, B):
     k = np.arange(1, len(E_u))
 
     plt.figure()
-    plt.loglog(k, E_u[1:], 'o-', label='Kinetic')
-    plt.loglog(k, E_B[1:], 's-', label='Magnetic')
+    plt.loglog(k, E_u[1:], '-', label='Kinetic')
+    plt.loglog(k, E_B[1:], '-.', label='Magnetic')
 
     # 参考 k^{-5/3}
     plt.loglog(k, 1e-2 * k**(-5/3), '--', label=r'$k^{-5/3}$')
@@ -218,7 +216,7 @@ def compute_divB(B):
     return norm(div(B), 'L2')
 
 def compute_energy(u, B):
-    return assemble(inner(u, u) * dx + c * inner(B, B) * dx)
+    return assemble(inner(u, u) * dx + c * inner(B, B) * dx) 
 
 def compute_helicity_m(B):
     return float(0)
@@ -238,7 +236,7 @@ def compute_ens(w, j):
 
 
 # Time stepping
-data_filename = "data.csv"
+data_filename = "output/data.csv"
 fieldnames = ["t", "divB", "energy", "helicity_m", "helicity_c", "ens_total", "w_max", "j_max"]
 if mesh.comm.rank == 0:
     with open(data_filename, "w", newline='') as f:
@@ -294,8 +292,8 @@ while (float(t) < float(T-dt) + 1.0e-10):
         with open(data_filename, "a", newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writerow(row)
-    if timestep == 20:
-        spectrum(z.sub(0), z.sub(6))
+    #if timestep == 50:
+    spectrum(z.sub(0), z.sub(6))
     pvd.write(*z.subfunctions, time=float(t))
     z_prev.assign(z)
     timestep += 1

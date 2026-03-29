@@ -2,11 +2,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 
-df = pd.read_csv("data.csv")
+df = pd.read_csv("output/data.csv")
 
 plt.plot(df["t"], df["energy"], label="energy")
 #plt.plot(df["t"], df["helicity_m"], label="magneticHelicity")
-#plt.plot(df["t"], df["helicity_c"], label="crossHelicity")
+plt.plot(df["t"], df["helicity_c"], label="crossHelicity")
 
 plt.xlabel("Time")
 plt.ylabel("Value")
